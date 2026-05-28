@@ -133,7 +133,7 @@ function App() {
           <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
             <div className="mx-auto flex max-w-md items-center justify-between px-4 py-3">
               <Link to="/" className="flex items-center gap-2">
-                <div className="h-8 w-8 rounded-xl bg-brand-teal" />
+                <AppLogo />
                 <div className="leading-tight">
                   <div className="text-sm font-semibold text-brand-navy">
                     BetterUs Care
@@ -186,7 +186,19 @@ function Home() {
   return (
     <div className="space-y-6">
       <section className="rounded-2xl bg-brand-navy px-5 py-6 text-brand-white">
-        <div className="text-sm text-white/80">BetterUs Care</div>
+        <div className="flex items-center gap-2 text-sm text-white/80">
+          <div className="h-8 w-8 rounded-xl bg-white/10 p-1">
+            <img
+              src="/logo.png"
+              alt="BetterUs Care"
+              className="h-full w-full rounded-lg object-contain"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none'
+              }}
+            />
+          </div>
+          <div>BetterUs Care</div>
+        </div>
         <h1 className="mt-2 text-2xl font-semibold leading-snug">
           Menghubungkan kebaikan dengan harapan kecil melalui pooling dan koneksi
           personal.
@@ -244,6 +256,25 @@ function RoleCard({ title, desc, to }) {
       </div>
       <div className="mt-2 text-sm text-slate-600">{desc}</div>
     </Link>
+  )
+}
+
+function AppLogo() {
+  const [failed, setFailed] = useState(false)
+
+  if (failed) {
+    return <div className="h-9 w-9 rounded-xl bg-brand-teal" />
+  }
+
+  return (
+    <div className="h-9 w-9 rounded-xl bg-white p-1 ring-1 ring-slate-200">
+      <img
+        src="/logo.png"
+        alt="BetterUs Care"
+        className="h-full w-full rounded-lg object-contain"
+        onError={() => setFailed(true)}
+      />
+    </div>
   )
 }
 
