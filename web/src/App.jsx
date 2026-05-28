@@ -4,6 +4,7 @@ import {
   Link,
   Route,
   Routes,
+  useLocation,
   useNavigate,
   useParams,
 } from 'react-router-dom'
@@ -11,6 +12,7 @@ import {
 const StoreContext = createContext(null)
 
 const STORAGE_KEY = 'betteruscare_store_v1'
+const AUTH_KEY = 'betteruscare_auth_v1'
 
 const ZONES = [
   {
@@ -134,10 +136,51 @@ function persistStore({ donations, moments }) {
   }
 }
 
+function loadPersistedAuth() {
+  try {
+    const raw = localStorage.getItem(AUTH_KEY)
+    if (!raw) return { token: null, user: null }
+    const parsed = JSON.parse(raw)
+    return {
+      token: parsed?.token ? String(parsed.token) : null,
+      user: parsed?.user || null,
+    }
+  } catch {
+    return { token: null, user: null }
+  }
+}
+
+function persistAuth({ token, user }) {
+  try {
+    localStorage.setItem(AUTH_KEY, JSON.stringify({ token, user }))
+  } catch {
+  }
+}
+
+async function apiFetch(path, { token, method, body } = {}) {
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers.Authorization = `Bearer ${token}`
+  const res = await fetch(path, {
+    method: method || (body ? 'POST' : 'GET'),
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) {
+    const err = new Error('API_ERROR')
+    err.status = res.status
+    err.data = data
+    throw err
+  }
+  return data
+}
+
 function App() {
   const initial = useMemo(() => loadPersistedStore(), [])
   const [donations, setDonations] = useState(initial.donations)
   const [moments, setMoments] = useState(initial.moments)
+  const [auth, setAuth] = useState(() => loadPersistedAuth())
+  const [apiStatus, setApiStatus] = useState({ ok: null, time: null })
 
   const store = useMemo(
     () => ({
@@ -145,46 +188,42 @@ function App() {
       setDonations,
       moments,
       setMoments,
+      auth,
+      setAuth,
+      apiStatus,
+      setApiStatus,
     }),
-    [donations, moments],
+    [donations, moments, auth, apiStatus],
   )
 
   useEffect(() => {
     persistStore({ donations, moments })
   }, [donations, moments])
 
+  useEffect(() => {
+    persistAuth({ token: auth.token, user: auth.user })
+  }, [auth.token, auth.user])
+
+  useEffect(() => {
+    apiFetch('/api/health')
+      .then((v) => setApiStatus({ ok: true, time: v.time }))
+      .catch(() => setApiStatus({ ok: false, time: null }))
+  }, [])
+
+  useEffect(() => {
+    if (!auth.token) return
+    if (auth.user) return
+    apiFetch('/api/me', { token: auth.token })
+      .then((u) => setAuth((prev) => ({ ...prev, user: u })))
+      .catch(() => setAuth({ token: null, user: null }))
+  }, [auth.token, auth.user])
+
   return (
     <BrowserRouter>
       <StoreContext.Provider value={store}>
-        <div className="min-h-screen bg-slate-50 text-slate-900">
-          <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
-            <div className="mx-auto flex max-w-md items-center justify-between px-4 py-3">
-              <Link to="/" className="flex items-center gap-2">
-                <AppLogo />
-                <div className="leading-tight">
-                  <div className="text-sm font-semibold text-brand-navy">
-                    BetterUs Care
-                  </div>
-                  <div className="text-xs text-slate-600">
-                    Mobile PWA (prototype)
-                  </div>
-                </div>
-              </Link>
-              <nav className="flex items-center gap-3 text-sm">
-                <Link className="text-slate-600 hover:text-slate-900" to="/keluarga">
-                  Keluarga
-                </Link>
-                <Link className="text-slate-600 hover:text-slate-900" to="/teman">
-                  Teman
-                </Link>
-                <Link className="text-slate-600 hover:text-slate-900" to="/admin">
-                  Admin
-                </Link>
-              </nav>
-            </div>
-          </header>
-
-          <main className="mx-auto max-w-md px-4 py-6">
+        <div className="min-h-screen bg-slate-50 pb-24 text-slate-900">
+          <TopBar />
+          <main className="mx-auto max-w-md px-4 py-5">
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/keluarga" element={<KeluargaDashboard />} />
@@ -203,6 +242,7 @@ function App() {
               <Route path="*" element={<NotFound />} />
             </Routes>
           </main>
+          <BottomNav />
         </div>
       </StoreContext.Provider>
     </BrowserRouter>
@@ -210,7 +250,8 @@ function App() {
 }
 
 function Home() {
-  const { setDonations, setMoments } = useStore()
+  const { setDonations, setMoments, apiStatus, auth } = useStore()
+  const [query, setQuery] = useState('')
 
   function clearDemoData() {
     setDonations([])
@@ -240,54 +281,72 @@ function Home() {
     setDonations((prev) => [...prev, donation])
   }
 
+  const filteredChildren = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return CHILDREN
+    return CHILDREN.filter((c) => `${c.code} ${c.publicName}`.toLowerCase().includes(q))
+  }, [query])
+
   return (
-    <div className="space-y-6">
-      <section className="rounded-2xl bg-brand-navy px-5 py-6 text-brand-white">
-        <div className="flex items-center gap-2 text-sm text-white/80">
-          <div className="h-8 w-8 rounded-xl bg-white/10 p-1">
-            <img
-              src="/logo.png"
-              alt="BetterUs Care"
-              className="h-full w-full rounded-lg object-contain"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none'
-              }}
-            />
+    <div className="-mt-12 space-y-5">
+      <section className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+        <div className="flex items-center gap-3">
+          <div className="flex-1">
+            <div className="relative">
+              <SearchIcon className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
+              <input
+                className="w-full rounded-2xl bg-slate-100 py-3 pl-10 pr-4 text-sm text-slate-900 outline-none ring-1 ring-slate-200 focus:bg-white focus:ring-slate-300"
+                placeholder="Cari harapan kecil (kode/inisial)"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
           </div>
-          <div>BetterUs Care</div>
+          <div className="rounded-2xl bg-brand-teal p-3 text-white">
+            <TuneIcon className="h-5 w-5" />
+          </div>
         </div>
-        <h1 className="mt-2 text-2xl font-semibold leading-snug">
-          Menghubungkan kebaikan dengan harapan kecil melalui pooling dan koneksi
-          personal.
-        </h1>
-        <p className="mt-3 text-sm text-white/85">
-          Prototype UI ini mengikuti SRS v1.0 (28 Mei 2026) sebagai baseline.
-        </p>
       </section>
 
-      <section className="grid gap-3">
-        <RoleCard
-          title="Keluarga (Donatur)"
-          desc="Zona • Berikan kebaikan • Tracking perjalanan • Momen doa"
-          to="/keluarga"
-        />
-        <RoleCard
-          title="Teman (Agent Lapangan)"
-          desc="Jadwal zona • Upload momen (foto/geotag/timestamp) • Selesaikan perjalanan"
-          to="/teman"
-        />
-        <RoleCard
-          title="Admin"
-          desc="Verifikasi kebaikan • Validasi momen • Kelola zona & harapan kecil"
-          to="/admin"
-        />
+      <section className="space-y-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+        <div className="flex items-center justify-between">
+          <SectionTitle title="Zona" subtitle="Jadwal penyaluran berikutnya" />
+          <div className="text-xs font-semibold text-brand-teal">Lihat semua</div>
+        </div>
+        <div className="flex gap-2 overflow-auto pb-1">
+          {ZONES.map((z) => (
+            <Chip key={z.id} label={z.name} sub={z.nextDateText} />
+          ))}
+        </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-5">
-        <div className="text-sm font-semibold text-slate-900">
-          Status Perjalanan (SRS)
+      <section className="space-y-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+        <div className="flex items-center justify-between">
+          <SectionTitle title="Harapan kecil" subtitle="Tier publik (contoh data)" />
+          <div className="text-xs font-semibold text-brand-teal">Lihat semua</div>
         </div>
-        <div className="mt-3 grid gap-2 text-sm text-slate-700">
+        <div className="grid gap-3">
+          {filteredChildren.map((c) => (
+            <ChildCard key={c.id} child={c} />
+          ))}
+          {filteredChildren.length === 0 ? (
+            <div className="rounded-2xl bg-slate-50 px-3 py-3 text-sm text-slate-600">
+              Tidak ada hasil.
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <AuthCard />
+
+      <section className="space-y-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+        <div className="flex items-center justify-between">
+          <SectionTitle title="Status Perjalanan" subtitle="Flow SRS" />
+          <div className="text-xs text-slate-500">
+            API: {apiStatus.ok === null ? '-' : apiStatus.ok ? 'OK' : 'OFF'}
+          </div>
+        </div>
+        <div className="grid gap-2 text-sm text-slate-700">
           <StatusPill label="diterima" />
           <StatusPill label="terverifikasi" />
           <StatusPill label="terjadwal" />
@@ -296,47 +355,33 @@ function Home() {
           <StatusPill label="tersalurkan" />
           <StatusPill label="selesai" />
         </div>
+        {auth.user ? (
+          <div className="rounded-2xl bg-slate-50 px-3 py-3 text-xs text-slate-600">
+            Masuk sebagai {auth.user.name} ({auth.user.role})
+          </div>
+        ) : null}
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-5">
-        <div className="text-sm font-semibold text-slate-900">Demo Tools</div>
-        <div className="mt-2 text-sm text-slate-600">
-          Data prototype disimpan di browser (localStorage) supaya tidak hilang saat
-          refresh.
-        </div>
-        <div className="mt-4 grid grid-cols-2 gap-2">
+      <section className="space-y-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+        <SectionTitle title="Demo Tools" subtitle="Untuk testing cepat" />
+        <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
             onClick={seedDemoData}
-            className="rounded-xl bg-brand-teal px-3 py-3 text-sm font-semibold text-white hover:brightness-95"
+            className="rounded-2xl bg-brand-teal px-3 py-3 text-sm font-semibold text-white hover:brightness-95"
           >
             Seed Data
           </button>
           <button
             type="button"
             onClick={clearDemoData}
-            className="rounded-xl bg-slate-900 px-3 py-3 text-sm font-semibold text-white hover:brightness-110"
+            className="rounded-2xl bg-slate-900 px-3 py-3 text-sm font-semibold text-white hover:brightness-110"
           >
             Reset
           </button>
         </div>
       </section>
     </div>
-  )
-}
-
-function RoleCard({ title, desc, to }) {
-  return (
-    <Link
-      to={to}
-      className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:border-slate-300"
-    >
-      <div className="flex items-center justify-between">
-        <div className="text-base font-semibold text-slate-900">{title}</div>
-        <div className="text-sm text-brand-teal">Buka</div>
-      </div>
-      <div className="mt-2 text-sm text-slate-600">{desc}</div>
-    </Link>
   )
 }
 
@@ -355,6 +400,371 @@ function AppLogo() {
         className="h-full w-full rounded-lg object-contain"
         onError={() => setFailed(true)}
       />
+    </div>
+  )
+}
+
+function initials(name) {
+  const parts = String(name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+  if (parts.length === 0) return 'BU'
+  const first = parts[0][0] || ''
+  const second = parts.length > 1 ? parts[1][0] || '' : parts[0][1] || ''
+  return `${first}${second}`.toUpperCase()
+}
+
+function SectionTitle({ title, subtitle }) {
+  return (
+    <div className="leading-tight">
+      <div className="text-sm font-semibold text-slate-900">{title}</div>
+      {subtitle ? <div className="mt-0.5 text-xs text-slate-500">{subtitle}</div> : null}
+    </div>
+  )
+}
+
+function Chip({ label, sub }) {
+  return (
+    <div className="min-w-44 rounded-2xl bg-slate-50 px-3 py-3 ring-1 ring-slate-200">
+      <div className="text-sm font-semibold text-slate-900">{label}</div>
+      <div className="mt-0.5 text-xs text-slate-600">{sub}</div>
+    </div>
+  )
+}
+
+function ChildCard({ child }) {
+  const zone = ZONES.find((z) => z.id === child.zoneId)
+  const statusTone =
+    child.status === 'butuh_teman'
+      ? 'bg-brand-gold/15 text-brand-navy ring-brand-gold/40'
+      : child.status === 'sudah_berkoneksi'
+        ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+        : 'bg-slate-100 text-slate-700 ring-slate-200'
+
+  return (
+    <div className="flex items-center gap-3 rounded-2xl bg-white p-3 ring-1 ring-slate-200">
+      <div className="h-14 w-14 rounded-2xl bg-gradient-to-br from-brand-teal/25 to-brand-navy/20 ring-1 ring-slate-200" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-900">
+              {child.code} • {child.publicName}
+            </div>
+            <div className="mt-0.5 text-xs text-slate-600">
+              Umur {child.age} • Zona {zone?.name ?? '-'}
+            </div>
+          </div>
+          <div className={`shrink-0 rounded-full px-2 py-1 text-[10px] ring-1 ${statusTone}`}>
+            {child.status}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AuthCard() {
+  const { auth, setAuth, setDonations, apiStatus } = useStore()
+  const [mode, setMode] = useState('login')
+  const [role, setRole] = useState('keluarga')
+  const [name, setName] = useState('')
+  const [phone, setPhone] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function syncDonations(token) {
+    try {
+      const list = await apiFetch('/api/donations/my', { token })
+      setDonations(list)
+    } catch {
+    }
+  }
+
+  async function doLogin() {
+    setLoading(true)
+    setError('')
+    try {
+      const out = await apiFetch('/api/auth/login', {
+        body: { email, password },
+      })
+      setAuth({ token: out.token, user: out.user })
+      if (out.user?.role === 'keluarga') {
+        await syncDonations(out.token)
+      }
+    } catch (e) {
+      setError(e?.data?.error || 'Gagal masuk')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function doRegister() {
+    setLoading(true)
+    setError('')
+    try {
+      const out = await apiFetch('/api/auth/register', {
+        body: { name, email, phone, password, role },
+      })
+      setAuth({ token: out.token, user: out.user })
+      if (out.user?.role === 'keluarga') {
+        await syncDonations(out.token)
+      }
+    } catch (e) {
+      setError(e?.data?.error || 'Gagal daftar')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function logout() {
+    setAuth({ token: null, user: null })
+  }
+
+  return (
+    <section className="space-y-3 rounded-3xl bg-white p-4 shadow-sm ring-1 ring-slate-200">
+      <div className="flex items-center justify-between">
+        <SectionTitle title="Akun" subtitle="Autentikasi (prototype API)" />
+        <div className="text-xs text-slate-500">
+          {apiStatus.ok ? 'Online' : apiStatus.ok === false ? 'Offline' : '-'}
+        </div>
+      </div>
+
+      {auth.user ? (
+        <div className="space-y-3">
+          <div className="rounded-2xl bg-slate-50 px-3 py-3 text-sm text-slate-700">
+            <div className="font-semibold text-slate-900">{auth.user.name}</div>
+            <div className="mt-1 text-xs text-slate-600">
+              {auth.user.email} • {auth.user.role}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={logout}
+            className="w-full rounded-2xl bg-slate-900 px-3 py-3 text-sm font-semibold text-white hover:brightness-110"
+          >
+            Keluar
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setMode('login')}
+              className={`rounded-2xl px-3 py-2 text-sm font-semibold ring-1 ${
+                mode === 'login'
+                  ? 'bg-brand-teal text-white ring-brand-teal'
+                  : 'bg-white text-slate-700 ring-slate-200'
+              }`}
+            >
+              Masuk
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('register')}
+              className={`rounded-2xl px-3 py-2 text-sm font-semibold ring-1 ${
+                mode === 'register'
+                  ? 'bg-brand-teal text-white ring-brand-teal'
+                  : 'bg-white text-slate-700 ring-slate-200'
+              }`}
+            >
+              Daftar
+            </button>
+          </div>
+
+          {mode === 'register' ? (
+            <div className="grid gap-2">
+              <div className="grid grid-cols-3 gap-2">
+                {['keluarga', 'teman', 'admin'].map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setRole(r)}
+                    className={`rounded-2xl px-3 py-2 text-xs font-semibold ring-1 ${
+                      role === r
+                        ? 'bg-brand-navy text-white ring-brand-navy'
+                        : 'bg-white text-slate-700 ring-slate-200'
+                    }`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+              <input
+                className="w-full rounded-2xl bg-slate-100 px-3 py-3 text-sm outline-none ring-1 ring-slate-200 focus:bg-white focus:ring-slate-300"
+                placeholder="Nama"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+              <input
+                className="w-full rounded-2xl bg-slate-100 px-3 py-3 text-sm outline-none ring-1 ring-slate-200 focus:bg-white focus:ring-slate-300"
+                placeholder="No. telepon"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+              />
+              <input
+                className="w-full rounded-2xl bg-slate-100 px-3 py-3 text-sm outline-none ring-1 ring-slate-200 focus:bg-white focus:ring-slate-300"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+              <input
+                className="w-full rounded-2xl bg-slate-100 px-3 py-3 text-sm outline-none ring-1 ring-slate-200 focus:bg-white focus:ring-slate-300"
+                placeholder="Password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={doRegister}
+                disabled={loading || !name || !phone || !email || !password}
+                className={`w-full rounded-2xl px-3 py-3 text-sm font-semibold ${
+                  loading || !name || !phone || !email || !password
+                    ? 'bg-slate-200 text-slate-500'
+                    : 'bg-brand-teal text-white hover:brightness-95'
+                }`}
+              >
+                Buat Akun
+              </button>
+            </div>
+          ) : (
+            <div className="grid gap-2">
+              <input
+                className="w-full rounded-2xl bg-slate-100 px-3 py-3 text-sm outline-none ring-1 ring-slate-200 focus:bg-white focus:ring-slate-300"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+              <input
+                className="w-full rounded-2xl bg-slate-100 px-3 py-3 text-sm outline-none ring-1 ring-slate-200 focus:bg-white focus:ring-slate-300"
+                placeholder="Password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={doLogin}
+                disabled={loading || !email || !password}
+                className={`w-full rounded-2xl px-3 py-3 text-sm font-semibold ${
+                  loading || !email || !password
+                    ? 'bg-slate-200 text-slate-500'
+                    : 'bg-brand-teal text-white hover:brightness-95'
+                }`}
+              >
+                Masuk
+              </button>
+            </div>
+          )}
+
+          {error ? (
+            <div className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 ring-1 ring-rose-200">
+              {error}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function TopBar() {
+  const { apiStatus, auth } = useStore()
+  const location = useLocation()
+  const isHome = location.pathname === '/'
+
+  return (
+    <div className="sticky top-0 z-20">
+      <div className="bg-gradient-to-b from-slate-950 via-brand-navy to-slate-50 pb-6 pt-4">
+        <div className="mx-auto max-w-md px-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="rounded-2xl bg-white/10 p-2 text-white/90">
+                <PinIcon className="h-5 w-5" />
+              </div>
+              <div className="leading-tight">
+                <div className="text-xs text-white/70">Lokasi kita</div>
+                <div className="flex items-center gap-1 text-sm font-semibold text-white">
+                  Kotabaru, Bandung
+                  <ChevronDownIcon className="h-4 w-4 text-white/70" />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 rounded-full bg-white/10 px-3 py-2 text-xs text-white/80">
+                <div
+                  className={`h-2 w-2 rounded-full ${
+                    apiStatus.ok === null
+                      ? 'bg-white/40'
+                      : apiStatus.ok
+                        ? 'bg-emerald-400'
+                        : 'bg-rose-400'
+                  }`}
+                />
+                API
+              </div>
+              <div className="h-10 w-10 overflow-hidden rounded-full bg-white/10 ring-1 ring-white/20">
+                <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-white/80">
+                  {auth.user?.name ? initials(auth.user.name) : 'BU'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {isHome ? (
+            <div className="mt-5 text-white">
+              <div className="text-2xl font-semibold leading-snug">
+                Mari bertumbuh dalam kebaikan, bersama.
+              </div>
+              <div className="mt-2 text-sm text-white/75">
+                Pooling kolektif dan koneksi personal untuk harapan kecil.
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function BottomNav() {
+  const location = useLocation()
+  const items = [
+    { to: '/', label: 'Home', icon: HomeIcon },
+    { to: '/keluarga', label: 'Keluarga', icon: HeartIcon },
+    { to: '/teman', label: 'Teman', icon: UsersIcon },
+    { to: '/admin', label: 'Admin', icon: ShieldIcon },
+  ]
+
+  return (
+    <div className="fixed bottom-4 left-0 right-0 z-30">
+      <div className="mx-auto max-w-md px-4">
+        <div className="rounded-3xl bg-slate-950/95 p-2 shadow-2xl ring-1 ring-white/10">
+          <div className="grid grid-cols-4 gap-1">
+            {items.map((it) => {
+              const active = location.pathname === it.to || location.pathname.startsWith(`${it.to}/`)
+              const Icon = it.icon
+              return (
+                <Link
+                  key={it.to}
+                  to={it.to}
+                  className={`flex flex-col items-center justify-center gap-1 rounded-2xl px-2 py-2 text-xs transition ${
+                    active ? 'bg-brand-teal text-white' : 'text-white/70 hover:text-white'
+                  }`}
+                >
+                  <Icon className="h-5 w-5" />
+                  <div className="text-[10px]">{it.label}</div>
+                </Link>
+              )
+            })}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -452,12 +862,14 @@ function KeluargaDashboard() {
 
 function KeluargaKebaikan() {
   const navigate = useNavigate()
-  const { setDonations } = useStore()
+  const { setDonations, auth } = useStore()
   const [amount, setAmount] = useState(10000)
   const [type, setType] = useState('pool_only')
   const [poolAmount, setPoolAmount] = useState(10000)
   const [personalAmount, setPersonalAmount] = useState(0)
   const [targetChildId, setTargetChildId] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
 
   const childOptions = useMemo(() => {
     const order = { butuh_teman: 0, aktif: 1, sudah_berkoneksi: 2, nonaktif: 3 }
@@ -525,22 +937,42 @@ function KeluargaKebaikan() {
     }
   }
 
-  function createDonation() {
-    if (!isValid) return
-    const id = uid('dn')
-    const donation = {
-      id,
+  async function createDonation() {
+    if (!isValid || submitting) return
+    setSubmitting(true)
+    setError('')
+
+    const payload = {
       amount: total,
       type,
       poolAmount: type === 'pool_only' ? total : effectivePool,
       personalAmount: type === 'personal_only' ? total : effectivePersonal,
       targetChildId: needsChild ? targetChildId : null,
-      status: 'draft',
-      history: [{ status: 'draft', at: nowIso() }],
-      createdAt: nowIso(),
     }
-    setDonations((prev) => [...prev, donation])
-    navigate(`/keluarga/bukti/${id}`)
+
+    try {
+      if (auth.token && auth.user?.role === 'keluarga') {
+        const created = await apiFetch('/api/donations', { token: auth.token, body: payload })
+        setDonations((prev) => [...prev, created])
+        navigate(`/keluarga/bukti/${created.id}`)
+        return
+      }
+
+      const id = uid('dn')
+      const donation = {
+        id,
+        ...payload,
+        status: 'draft',
+        history: [{ status: 'draft', at: nowIso() }],
+        createdAt: nowIso(),
+      }
+      setDonations((prev) => [...prev, donation])
+      navigate(`/keluarga/bukti/${id}`)
+    } catch (e) {
+      setError(e?.data?.error || 'Gagal membuat kebaikan')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -699,6 +1131,12 @@ function KeluargaKebaikan() {
       >
         Lanjut Upload Bukti
       </button>
+
+      {error ? (
+        <div className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 ring-1 ring-rose-200">
+          {error}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -706,31 +1144,57 @@ function KeluargaKebaikan() {
 function KeluargaBukti() {
   const navigate = useNavigate()
   const { donationId } = useParams()
-  const { donations, setDonations } = useStore()
+  const { donations, setDonations, auth } = useStore()
   const donation = donations.find((d) => d.id === donationId)
   const [bankName, setBankName] = useState('')
   const [senderName, setSenderName] = useState('')
   const [transferDate, setTransferDate] = useState('')
   const [fileName, setFileName] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
 
   if (!donation) return <NotFound />
 
-  function submitProof() {
+  async function submitProof() {
     if (!bankName || !senderName || !transferDate || !fileName) return
-    setDonations((prev) =>
-      prev.map((d) => {
-        if (d.id !== donation.id) return d
-        const updated = {
-          ...d,
-          bankName,
-          senderName,
-          transferDate,
-          proofFileName: fileName,
-        }
-        return pushHistory(updated, 'diterima')
-      }),
-    )
-    navigate(`/keluarga/tracking/${donation.id}`)
+    if (submitting) return
+    setSubmitting(true)
+    setError('')
+
+    const payload = {
+      bankName,
+      senderName,
+      transferDate,
+      proofFileName: fileName,
+    }
+
+    try {
+      if (auth.token && auth.user?.role === 'keluarga') {
+        const updated = await apiFetch(`/api/donations/${donation.id}/proof`, {
+          token: auth.token,
+          body: payload,
+        })
+        setDonations((prev) => prev.map((d) => (d.id === donation.id ? updated : d)))
+        navigate(`/keluarga/tracking/${donation.id}`)
+        return
+      }
+
+      setDonations((prev) =>
+        prev.map((d) => {
+          if (d.id !== donation.id) return d
+          const localUpdated = {
+            ...d,
+            ...payload,
+          }
+          return pushHistory(localUpdated, 'diterima')
+        }),
+      )
+      navigate(`/keluarga/tracking/${donation.id}`)
+    } catch (e) {
+      setError(e?.data?.error || 'Gagal mengirim bukti')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -807,6 +1271,12 @@ function KeluargaBukti() {
           Kirim Bukti
         </button>
       </div>
+
+      {error ? (
+        <div className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 ring-1 ring-rose-200">
+          {error}
+        </div>
+      ) : null}
 
       <div className="rounded-2xl border border-slate-200 bg-white p-5">
         <div className="text-sm font-semibold text-slate-900">
@@ -1201,13 +1671,48 @@ function AdminDashboard() {
 }
 
 function AdminVerifikasi() {
-  const { donations, setDonations } = useStore()
-  const pending = donations
-    .filter((d) => d.status === 'diterima')
-    .slice()
-    .reverse()
+  const { donations, setDonations, auth } = useStore()
+  const [pending, setPending] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
 
-  function verifyDonation(donationId) {
+  useEffect(() => {
+    if (auth.token && auth.user?.role === 'admin') {
+      setLoading(true)
+      setError('')
+      apiFetch('/api/admin/donations/pending', { token: auth.token })
+        .then((list) => setPending(Array.isArray(list) ? list : []))
+        .catch((e) => setError(e?.data?.error || 'Gagal memuat antrian'))
+        .finally(() => setLoading(false))
+      return
+    }
+
+    const localPending = donations
+      .filter((d) => d.status === 'diterima')
+      .slice()
+      .reverse()
+    setPending(localPending)
+  }, [auth.token, auth.user?.role, donations])
+
+  async function verifyDonation(donationId) {
+    if (auth.token && auth.user?.role === 'admin') {
+      try {
+        const updated = await apiFetch(`/api/admin/donations/${donationId}/verify`, {
+          token: auth.token,
+          body: { action: 'approve' },
+        })
+        setPending((prev) => prev.filter((d) => d.id !== donationId))
+        setDonations((prev) => {
+          const exists = prev.some((d) => d.id === updated.id)
+          if (exists) return prev.map((d) => (d.id === updated.id ? updated : d))
+          return [...prev, updated]
+        })
+      } catch (e) {
+        setError(e?.data?.error || 'Gagal verifikasi')
+      }
+      return
+    }
+
     setDonations((prev) =>
       prev.map((d) => {
         if (d.id !== donationId) return d
@@ -1216,7 +1721,25 @@ function AdminVerifikasi() {
     )
   }
 
-  function rejectDonation(donationId, reason) {
+  async function rejectDonation(donationId, reason) {
+    if (auth.token && auth.user?.role === 'admin') {
+      try {
+        const updated = await apiFetch(`/api/admin/donations/${donationId}/verify`, {
+          token: auth.token,
+          body: { action: 'reject', reason },
+        })
+        setPending((prev) => prev.filter((d) => d.id !== donationId))
+        setDonations((prev) => {
+          const exists = prev.some((d) => d.id === updated.id)
+          if (exists) return prev.map((d) => (d.id === updated.id ? updated : d))
+          return [...prev, updated]
+        })
+      } catch (e) {
+        setError(e?.data?.error || 'Gagal reject')
+      }
+      return
+    }
+
     setDonations((prev) =>
       prev.map((d) => {
         if (d.id !== donationId) return d
@@ -1238,7 +1761,9 @@ function AdminVerifikasi() {
           Menunggu Verifikasi
         </div>
         <div className="mt-3 grid gap-2">
-          {pending.length === 0 ? (
+          {loading ? (
+            <div className="text-sm text-slate-600">Memuat…</div>
+          ) : pending.length === 0 ? (
             <div className="text-sm text-slate-600">Tidak ada antrian.</div>
           ) : (
             pending.map((d) => (
@@ -1252,6 +1777,12 @@ function AdminVerifikasi() {
           )}
         </div>
       </div>
+
+      {error ? (
+        <div className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 ring-1 ring-rose-200">
+          {error}
+        </div>
+      ) : null}
     </div>
   )
 }
