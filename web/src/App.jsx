@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import {
   BrowserRouter,
   Link,
@@ -9,6 +9,8 @@ import {
 } from 'react-router-dom'
 
 const StoreContext = createContext(null)
+
+const STORAGE_KEY = 'betteruscare_store_v1'
 
 const ZONES = [
   {
@@ -112,9 +114,30 @@ function useStore() {
   return ctx
 }
 
+function loadPersistedStore() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return { donations: [], moments: [] }
+    const parsed = JSON.parse(raw)
+    const donations = Array.isArray(parsed?.donations) ? parsed.donations : []
+    const moments = Array.isArray(parsed?.moments) ? parsed.moments : []
+    return { donations, moments }
+  } catch {
+    return { donations: [], moments: [] }
+  }
+}
+
+function persistStore({ donations, moments }) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ donations, moments }))
+  } catch {
+  }
+}
+
 function App() {
-  const [donations, setDonations] = useState([])
-  const [moments, setMoments] = useState([])
+  const initial = useMemo(() => loadPersistedStore(), [])
+  const [donations, setDonations] = useState(initial.donations)
+  const [moments, setMoments] = useState(initial.moments)
 
   const store = useMemo(
     () => ({
@@ -125,6 +148,10 @@ function App() {
     }),
     [donations, moments],
   )
+
+  useEffect(() => {
+    persistStore({ donations, moments })
+  }, [donations, moments])
 
   return (
     <BrowserRouter>
@@ -183,6 +210,36 @@ function App() {
 }
 
 function Home() {
+  const { setDonations, setMoments } = useStore()
+
+  function clearDemoData() {
+    setDonations([])
+    setMoments([])
+  }
+
+  function seedDemoData() {
+    const id = uid('dn')
+    const donation = {
+      id,
+      amount: 25000,
+      type: 'hybrid',
+      poolAmount: 15000,
+      personalAmount: 10000,
+      targetChildId: 'ch_hk001',
+      status: 'diterima',
+      history: [
+        { status: 'draft', at: nowIso() },
+        { status: 'diterima', at: nowIso() },
+      ],
+      createdAt: nowIso(),
+      bankName: 'BCA',
+      senderName: 'Demo Keluarga',
+      transferDate: new Date().toISOString().slice(0, 10),
+      proofFileName: 'bukti-demo.png',
+    }
+    setDonations((prev) => [...prev, donation])
+  }
+
   return (
     <div className="space-y-6">
       <section className="rounded-2xl bg-brand-navy px-5 py-6 text-brand-white">
@@ -238,6 +295,30 @@ function Home() {
           <StatusPill label="di_lokasi" />
           <StatusPill label="tersalurkan" />
           <StatusPill label="selesai" />
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5">
+        <div className="text-sm font-semibold text-slate-900">Demo Tools</div>
+        <div className="mt-2 text-sm text-slate-600">
+          Data prototype disimpan di browser (localStorage) supaya tidak hilang saat
+          refresh.
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={seedDemoData}
+            className="rounded-xl bg-brand-teal px-3 py-3 text-sm font-semibold text-white hover:brightness-95"
+          >
+            Seed Data
+          </button>
+          <button
+            type="button"
+            onClick={clearDemoData}
+            className="rounded-xl bg-slate-900 px-3 py-3 text-sm font-semibold text-white hover:brightness-110"
+          >
+            Reset
+          </button>
         </div>
       </section>
     </div>
